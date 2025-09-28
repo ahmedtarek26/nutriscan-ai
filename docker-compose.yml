@@ -1,0 +1,40 @@
+version: "3.9"
+services:
+  db:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: nutriscan
+      POSTGRES_PASSWORD: nutriscan
+      POSTGRES_DB: nutriscan
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  api:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - ./:/app
+    command: bash -c "pip install fastapi uvicorn && uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload"
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+  rag:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - ./:/app
+    command: bash -c "pip install fastapi uvicorn && uvicorn apps.rag.main:app --host 0.0.0.0 --port 8001 --reload"
+    ports:
+      - "8001:8001"
+  ui:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - ./:/app
+    command: bash -c "pip install streamlit && streamlit run apps/ui/main.py --server.port 8501 --server.address 0.0.0.0"
+    ports:
+      - "8501:8501"
+volumes:
+  pgdata:
