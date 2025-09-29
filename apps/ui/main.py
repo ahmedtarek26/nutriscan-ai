@@ -14,6 +14,10 @@ the RAG service.
 import streamlit as st
 import requests
 from typing import Any, Dict
+import os
+
+API_BASE = os.getenv("NUTRISCAN_API_BASE", "http://localhost:8000")
+
 
 
 def fetch_product(barcode: str, nutrients: Dict[str, Any]) -> Dict[str, Any]:
@@ -29,7 +33,7 @@ def fetch_product(barcode: str, nutrients: Dict[str, Any]) -> Dict[str, Any]:
     """
     # Build query string from provided nutrient values.
     params = {k: v for k, v in nutrients.items() if v is not None}
-    url = f"http://localhost:8000/products/{barcode}"
+    url = f"{API_BASE}/products/{barcode}"
     try:
         resp = requests.get(url, params=params, timeout=5)
         resp.raise_for_status()

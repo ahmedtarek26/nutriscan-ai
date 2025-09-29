@@ -11,6 +11,8 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
   api:
+    environment:
+      - PYTHONPATH=/app
     image: python:3.11-slim
     working_dir: /app
     volumes:
@@ -29,6 +31,8 @@ services:
     ports:
       - "8001:8001"
   ui:
+    environment:
+      NUTRISCAN_API_BASE: "http://api:8000"
     image: python:3.11-slim
     working_dir: /app
     volumes:
