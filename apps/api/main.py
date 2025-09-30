@@ -1,60 +1,90 @@
-# apps/api/main.py
-from fastapi import FastAPI, Query, HTTPException
-from typing import Dict, Any
-import dataclasses, json
+"""FastAPI service exposing product and score endpoints.
 
-from models.scoring.nutri_score import compute_nutri_score
-from models.scoring.eco_score import compute_eco_score  # stub
+This microservice uses the in‑memory ``ProductDB`` to look up normalised
+products, compute their scores on the fly and serve JSON responses.  Endpoints:
 
-app = FastAPI(title="NutriScan API")
+* ``GET /healthz`` – liveness check.
+* ``GET /products/{barcode}`` – return a product card with nutrition per 100 g, scores and flags.
+* ``GET /scores/{barcode}`` – return only the scoring breakdown for a product.
+* ``POST /compare`` – compare two barcodes; returns a side‑by‑side diff of nutrients and scores.
+"""
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List, Dict, Any
+
+# When running this module with ``uvicorn``, ensure that the root of the
+# repository is on ``PYTHONPATH`` so that `nutriscan_ai` can be imported.
+from nutriscan_ai.packages.nutriscan_utils import (
+    load_products,
+    ProductDB,
+    compute_scores_for_product,
+)
+
+app = FastAPI(title="NutriScan API", version="0.1.0")
+
+
+class CompareRequest(BaseModel):
+    barcodes: List[str]
+
+
+class CompareResponse(BaseModel):
+    products: Dict[str, Any]
+
+
+# Initialise the product database and precompute scores on startup
+_raw_products = load_products()
+_db = ProductDB()
+for product in _raw_products:
+    scored = compute_scores_for_product(product)
+    _db.upsert(scored)
+
 
 @app.get("/healthz")
-def healthz():
+def healthz() -> Dict[str, str]:
+    """Simple health check endpoint."""
     return {"status": "ok"}
 
-def _to_plain(x):
-    """Make anything JSON-serializable for FastAPI."""
-    if dataclasses.is_dataclass(x):
-        return dataclasses.asdict(x)
-    if hasattr(x, "model_dump"):         # pydantic v2
-        return x.model_dump()
-    if hasattr(x, "dict"):               # pydantic v1
-        return x.dict()
-    try:
-        json.dumps(x)
-        return x
-    except TypeError:
-        return json.loads(json.dumps(x, default=str))
 
 @app.get("/products/{barcode}")
-def get_product(
-    barcode: str,
-    energy_kcal_100g: float = Query(...),
-    sugars_100g: float = Query(...),
-    sat_fat_100g: float = Query(...),
-    sodium_100g: float = Query(...),
-    fibre_100g: float = Query(...),
-    protein_100g: float = Query(...),
-    fvnl_percent: float = Query(...)
-) -> Dict[str, Any]:
-    nutrients = {
-        "energy_kcal_100g": energy_kcal_100g,
-        "sugars_100g": sugars_100g,
-        "sat_fat_100g": sat_fat_100g,
-        "sodium_100g": sodium_100g,
-        "fibre_100g": fibre_100g,
-        "protein_100g": protein_100g,
-        "fvnl_percent": fvnl_percent,
-    }
-    try:
-        nutri = compute_nutri_score(nutrients)        # may return object or dict
-        eco   = compute_eco_score(nutrients)            # stub may return object/dict
-        return {
-            "barcode": barcode,
-            "nutrients": nutrients,
-            "nutri_score": _to_plain(nutri),
-            "eco_score": _to_plain(eco),
-        }
-    except Exception as e:
-        # surface a clean 400 instead of a 500 if inputs are bad
-        raise HTTPException(status_code=400, detail=f"scoring_failed: {type(e).__name__}: {e}")
+def get_product(barcode: str) -> Dict[str, Any]:
+    """Return a product card with scores and flags.
+
+    Raises
+    ------
+    HTTPException
+        If the barcode is not found.
+    """
+    product = _db.get(barcode)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return product
+
+
+@app.get("/scores/{barcode}")
+def get_scores(barcode: str) -> Dict[str, Any]:
+    """Return scoring breakdown for a product.
+
+    Raises
+    ------
+    HTTPException
+        If the barcode is not found.
+    """
+    product = _db.get(barcode)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return product.get("scores", {})
+
+
+@app.post("/compare", response_model=CompareResponse)
+def compare_products(req: CompareRequest) -> CompareResponse:
+    """Compare two products by their barcodes.
+
+    The request body must contain exactly two barcodes.  The response contains a
+    dictionary mapping each barcode to its product card (or ``null`` if a
+    barcode is unknown).
+    """
+    if len(req.barcodes) != 2:
+        raise HTTPException(status_code=400, detail="Exactly two barcodes must be provided")
+    barcode1, barcode2 = req.barcodes
+    products = _db.compare(barcode1, barcode2)
+    return CompareResponse(products=products)
